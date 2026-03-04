@@ -110,10 +110,7 @@ async def predict(
 # ── History endpoint ──────────────────────────────────────────────
 @app.get('/history')
 async def history(limit: int = 50):
-    res = supabase.table('result_details')
-             .select('*')
-             .limit(limit)
-             .execute()
+    res = supabase.table('result_details').select('*').limit(limit).execute()
     return res.data
  
 @app.delete('/history/{result_id}')
