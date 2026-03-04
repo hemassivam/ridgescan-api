@@ -22,9 +22,13 @@ model       = None
 class_names = ['A+','A-','AB+','AB-','B+','B-','O+','O-']
 supabase    = None
 
-@app.on_event('startup')
-async def startup():
-    global model, class_names, supabase
+import threading
+
+model       = None
+model_ready = False
+
+def load_model_background():
+    global model, class_names, model_ready, supabase
 
     supabase = create_client(
         os.environ['SUPABASE_URL'],
@@ -38,17 +42,33 @@ async def startup():
         token     = os.environ.get('HF_TOKEN')
     )
 
-    # Load class names
     cn_path = os.path.join(model_dir, 'class_names.json')
     if os.path.exists(cn_path):
         with open(cn_path) as f:
             m = json.load(f)
         class_names = [m[str(i)] for i in range(len(m))]
 
-    # Load the .keras model file
-    model = tf.keras.models.load_model(os.path.join(model_dir, 'best_model.keras'))
+    model = tf.keras.models.load_model(
+        os.path.join(model_dir, 'best_model.keras')
+    )
+    model_ready = True
     print(f'Model ready. Classes: {class_names}')
 
+@app.on_event('startup')
+async def startup():
+    # Launch model loading in background — port opens immediately
+    thread = threading.Thread(target=load_model_background, daemon=True)
+    thread.start()
+
+@app.get('/health')
+async def health():
+    return {'status': 'ok', 'model': model_ready}
+
+@app.post('/predict')
+async def predict(...):
+    if not model_ready:
+        raise HTTPException(status_code=503, detail='Model still loading, try again in 30 seconds')
+    # ... rest of predict unchanged
 
 @app.post('/predict')
 async def predict(
