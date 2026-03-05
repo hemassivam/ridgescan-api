@@ -2,7 +2,7 @@ fastapi
 uvicorn[standard]
 python-multipart
 tensorflow-cpu==2.15.0
-keras>=3.0
+keras>=2.15.0
 numpy
 opencv-python-headless
 supabase
