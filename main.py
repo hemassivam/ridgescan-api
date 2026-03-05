@@ -1,4 +1,4 @@
-import os, json, io
+import os, json, threading
 import numpy as np
 import cv2
 import tensorflow as tf
@@ -6,27 +6,33 @@ from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from supabase import create_client
 from huggingface_hub import snapshot_download
- 
+
 app = FastAPI(title='RidgeScan API')
- 
-# Allow the Flask frontend to call this API
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=['*'],
     allow_methods=['*'],
     allow_headers=['*']
 )
- 
-# ── Globals loaded at startup ─────────────────────────────────────
+
+# ── Globals ───────────────────────────────────────────────────────
 model       = None
-class_names = ['A+','A-','AB+','AB-','B+','B-','O+','O-']
+class_names = ['A+', 'A-', 'AB+', 'AB-', 'B+', 'B-', 'O+', 'O-']
 supabase    = None
-
-import threading
-
-model       = None
 model_ready = False
 
+# ── Preprocessing ─────────────────────────────────────────────────
+def preprocess(image_bytes: bytes) -> np.ndarray:
+    arr = np.frombuffer(image_bytes, dtype=np.uint8)
+    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    if img is None:
+        raise ValueError('Could not decode image')
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    img = cv2.resize(img, (300, 300))
+    return img.astype(np.float32)
+
+# ── Background model loader ───────────────────────────────────────
 def load_model_background():
     global model, class_names, model_ready, supabase
 
@@ -54,22 +60,18 @@ def load_model_background():
     model_ready = True
     print(f'Model ready. Classes: {class_names}')
 
+# ── Startup: launch background thread so port binds immediately ───
 @app.on_event('startup')
 async def startup():
-    # Launch model loading in background — port opens immediately
     thread = threading.Thread(target=load_model_background, daemon=True)
     thread.start()
 
+# ── Health check ──────────────────────────────────────────────────
 @app.get('/health')
 async def health():
     return {'status': 'ok', 'model': model_ready}
 
-@app.post('/predict')
-async def predict(...):
-    if not model_ready:
-        raise HTTPException(status_code=503, detail='Model still loading, try again in 30 seconds')
-    # ... rest of predict unchanged
-
+# ── Predict ───────────────────────────────────────────────────────
 @app.post('/predict')
 async def predict(
     file:   UploadFile = File(...),
@@ -78,6 +80,9 @@ async def predict(
     gender: str        = Form(''),
     email:  str        = Form(''),
 ):
+    if not model_ready:
+        raise HTTPException(status_code=503, detail='Model still loading — try again in 30 seconds')
+
     contents = await file.read()
     try:
         img = preprocess(contents)
@@ -86,7 +91,6 @@ async def predict(
     finally:
         del contents
 
-    import tensorflow as tf
     batch  = tf.constant(np.expand_dims(img, 0))
     probs  = model.predict(batch, verbose=0)[0].tolist()
     result = class_names[int(np.argmax(probs))]
@@ -107,18 +111,14 @@ async def predict(
     }).execute()
 
     return {'prediction': result, 'user_id': user_id}
- 
-# ── History endpoint ──────────────────────────────────────────────
+
+# ── History ───────────────────────────────────────────────────────
 @app.get('/history')
 async def history(limit: int = 50):
     res = supabase.table('result_details').select('*').limit(limit).execute()
     return res.data
- 
+
 @app.delete('/history/{result_id}')
 async def delete_record(result_id: str):
     supabase.table('results').delete().eq('id', result_id).execute()
     return {'ok': True}
- 
-@app.get('/health')
-async def health():
-    return {'status': 'ok', 'model': model is not None}
