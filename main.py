@@ -27,7 +27,7 @@ def preprocess(image_bytes: bytes) -> np.ndarray:
     arr = np.frombuffer(image_bytes, dtype=np.uint8)
     img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
     if img is None:
-        raise ValueError('Could not decode image')
+        raise ValueError('Could not decode image. Make sure it is a valid JPG/PNG/BMP.')
     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
     img = cv2.resize(img, (300, 300))
     return img.astype(np.float32)
@@ -36,37 +36,41 @@ def preprocess(image_bytes: bytes) -> np.ndarray:
 def load_model_background():
     global model, class_names, model_ready, supabase
 
-    supabase = create_client(
-        os.environ['SUPABASE_URL'],
-        os.environ['SUPABASE_KEY']
-    )
+    try:
+        supabase = create_client(
+            os.environ['SUPABASE_URL'],
+            os.environ['SUPABASE_KEY']
+        )
 
-    print('Downloading model from Hugging Face...')
-    model_dir = snapshot_download(
-        repo_id   = os.environ['HF_REPO'],
-        repo_type = 'model',
-        token     = os.environ.get('HF_TOKEN')
-    )
+        print('Downloading model from Hugging Face...')
+        model_dir = snapshot_download(
+            repo_id   = os.environ['HF_REPO'],
+            repo_type = 'model',
+            token     = os.environ.get('HF_TOKEN')
+        )
 
-    cn_path = os.path.join(model_dir, 'class_names.json')
-    if os.path.exists(cn_path):
-        with open(cn_path) as f:
-            m = json.load(f)
-        class_names = [m[str(i)] for i in range(len(m))]
+        cn_path = os.path.join(model_dir, 'class_names.json')
+        if os.path.exists(cn_path):
+            with open(cn_path) as f:
+                m = json.load(f)
+            class_names = [m[str(i)] for i in range(len(m))]
 
-    model = tf.keras.models.load_model(
-        os.path.join(model_dir, 'best_model.keras')
-    )
-    model_ready = True
-    print(f'Model ready. Classes: {class_names}')
+        model = tf.keras.models.load_model(
+            os.path.join(model_dir, 'best_model.keras')
+        )
+        model_ready = True
+        print(f'Model ready. Classes: {class_names}')
 
-# ── Startup: launch background thread so port binds immediately ───
+    except Exception as e:
+        print(f'ERROR loading model: {e}')
+
+# ── Startup ───────────────────────────────────────────────────────
 @app.on_event('startup')
 async def startup():
     thread = threading.Thread(target=load_model_background, daemon=True)
     thread.start()
 
-# ── Health check ──────────────────────────────────────────────────
+# ── Health ────────────────────────────────────────────────────────
 @app.get('/health')
 async def health():
     return {'status': 'ok', 'model': model_ready}
@@ -81,7 +85,10 @@ async def predict(
     email:  str        = Form(''),
 ):
     if not model_ready:
-        raise HTTPException(status_code=503, detail='Model still loading — try again in 30 seconds')
+        raise HTTPException(
+            status_code=503,
+            detail='Model still loading — please try again in 30 seconds.'
+        )
 
     contents = await file.read()
     try:
