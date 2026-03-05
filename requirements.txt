@@ -1,8 +1,10 @@
 fastapi
 uvicorn[standard]
 python-multipart
-opencv-python-headless
-numpy==1.26.4
 tensorflow-cpu==2.15.0
-huggingface_hub
+keras>=3.0
+numpy
+opencv-python-headless
 supabase
+huggingface_hub
+python-dotenv
