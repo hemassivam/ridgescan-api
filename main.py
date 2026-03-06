@@ -32,6 +32,12 @@ def preprocess(image_bytes: bytes) -> np.ndarray:
     img = cv2.resize(img, (300, 300))
     return img.astype(np.float32)
 
+tf.keras.mixed_precision.set_global_policy('float32')
+
+model = tf.keras.models.load_model(
+    os.path.join(model_dir, 'best_model.keras')
+)
+
 # ── Background model loader ───────────────────────────────────────
 def load_model_background():
     global model, class_names, model_ready, supabase
