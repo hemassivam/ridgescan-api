@@ -1,11 +1,12 @@
-import os, json, threading
-import numpy as np
-import cv2
-import tensorflow as tf
+import os
+import json
+import threading
+
+# ── Lightweight imports only at module level ──────────────────────
+# TensorFlow/numpy/cv2 are imported INSIDE the background thread
+# so uvicorn binds the port in <1s and Render doesn't time out.
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from supabase import create_client
-from huggingface_hub import snapshot_download
 
 app = FastAPI(title='RidgeScan API')
 
@@ -22,27 +23,18 @@ class_names = ['A+', 'A-', 'AB+', 'AB-', 'B+', 'B-', 'O+', 'O-']
 supabase    = None
 model_ready = False
 
-# ── Preprocessing ─────────────────────────────────────────────────
-def preprocess(image_bytes: bytes) -> np.ndarray:
-    arr = np.frombuffer(image_bytes, dtype=np.uint8)
-    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-    if img is None:
-        raise ValueError('Could not decode image. Make sure it is a valid JPG/PNG/BMP.')
-    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-    img = cv2.resize(img, (300, 300))
-    return img.astype(np.float32)
-
-tf.keras.mixed_precision.set_global_policy('float32')
-
-model = tf.keras.models.load_model(
-    os.path.join(model_dir, 'best_model.keras')
-)
-
-# ── Background model loader ───────────────────────────────────────
+# ── Background loader ─────────────────────────────────────────────
 def load_model_background():
     global model, class_names, model_ready, supabase
 
     try:
+        # Heavy imports done here — after port is already bound
+        import numpy as np
+        import cv2
+        import tensorflow as tf
+        from supabase import create_client
+        from huggingface_hub import snapshot_download
+
         supabase = create_client(
             os.environ['SUPABASE_URL'],
             os.environ['SUPABASE_KEY']
@@ -69,6 +61,8 @@ def load_model_background():
 
     except Exception as e:
         print(f'ERROR loading model: {e}')
+        import traceback
+        traceback.print_exc()
 
 # ── Startup ───────────────────────────────────────────────────────
 @app.on_event('startup')
@@ -96,17 +90,26 @@ async def predict(
             detail='Model still loading — please try again in 30 seconds.'
         )
 
+    import numpy as np
+    import cv2
+    import tensorflow as tf
+
     contents = await file.read()
     try:
-        img = preprocess(contents)
+        arr = __import__('numpy').frombuffer(contents, dtype=__import__('numpy').uint8)
+        img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        if img is None:
+            raise ValueError('Could not decode image.')
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        img = cv2.resize(img, (300, 300)).astype('float32')
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
     finally:
         del contents
 
-    batch  = tf.constant(np.expand_dims(img, 0))
+    batch  = tf.constant(img[None])
     probs  = model.predict(batch, verbose=0)[0].tolist()
-    result = class_names[int(np.argmax(probs))]
+    result = class_names[int(__import__('numpy').argmax(probs))]
     del img, batch
 
     user_res = supabase.table('users').insert({
